@@ -1,0 +1,54 @@
+FROM composer/composer:1.1 as composer
+
+ARG version=dev-master
+ARG http_version=dev-master
+RUN mkdir /ppm && cd /ppm && composer require php-pm/php-pm:${version} && composer require php-pm/httpkernel-adapter:${http_version}
+
+FROM alpine:3.7
+
+ARG NALOGKA_OWNER
+ARG NALOGKA_PPM_PORT
+ARG NALOGKA_STATIC_DIR
+
+ENV NALOGKA_OWNER ${NALOGKA_OWNER:-1000}
+ENV NALOGKA_PPM_PORT ${NALOGKA_PPM_PORT:-8080}
+ENV NALOGKA_STATIC_DIR ${NALOGKA_STATIC_DIR:-www}
+ENV NALOGKA_PPM_WORKERS 8
+ENV NALOGKA_PPM_BOOTSTRAP symfony
+ENV NALOGKA_PPM_ENV prod
+
+ENV LC_ALL en_US.UTF-8
+ENV LANG en_US.UTF-8
+
+RUN apk --no-cache add tzdata \
+    && cp /usr/share/zoneinfo/Etc/UTC /etc/localtime \
+    && echo "UTC" > /etc/timezone \
+    && apk del tzdata
+
+RUN apk --no-cache add \
+        php7 php7-opcache php7-fpm php7-cgi php7-ctype php7-json php7-dom php7-zip php7-zip php7-gd \
+        php7-curl php7-mbstring php7-redis php7-mcrypt php7-iconv php7-posix php7-pdo_mysql php7-tokenizer php7-simplexml php7-session \
+        php7-xml php7-sockets php7-openssl php7-fileinfo php7-ldap php7-exif php7-pcntl php7-xmlwriter php7-phar php7-zlib \
+        php7-intl \
+        git openssh-client curl curl-dev \
+    && curl -s https://getcomposer.org/installer | php -- --install-dir=/usr/bin --filename=composer && rm -rf /tmp/*
+
+COPY --from=composer /ppm /ppm
+
+RUN sed -i 's#ComposerAutoloaderInit#PpmComposerAutoloaderInit#' /ppm/vendor/composer/autoload_real.php /ppm/vendor/autoload.php \
+    && echo -e '#!/bin/bash\n\ntrapIt () { "$@"& pid="$!"; for SGNL in INT TERM CHLD USR1 USR2; do trap "kill -$SGNL $pid" "$SGNL"; done; while kill -0 $pid > /dev/null 2>&1; do wait $pid; ec="$?"; done; exit $ec;};\n\ntrapIt /ppm/vendor/bin/ppm --ansi  start --socket-path=/tmp --pidfile=/tmp/ppm.pid --host=0.0.0.0 --port=${NALOGKA_PPM_PORT} --workers=${NALOGKA_PPM_WORKERS} --bootstrap=${NALOGKA_PPM_BOOTSTRAP} --app-env=${NALOGKA_PPM_ENV} --static-directory=/project/${NALOGKA_STATIC_DIR} "$@"' \
+        > /docker-entrypoint.sh \
+    && chmod 755 /docker-entrypoint.sh \
+    && echo -e 'date.timezone = UTC\nmemory_limit = -1\ndisable_functions =\nmax_execution_time = 0\nmax_input_time = 0' \
+        > /etc/php7/php.ini
+ENTRYPOINT ["/bin/sh", "/docker-entrypoint.sh"]
+
+RUN adduser -u${NALOGKA_OWNER} -g "" -D user \
+    && mkdir /project && chown user:user /project && chmod 0700 /project
+WORKDIR /project
+
+EXPOSE ${NALOGKA_PPM_PORT}
+
+USER user
+
+LABEL "com.nalogka.ppm"=true

@@ -1,0 +1,9 @@
+FROM docker.nalogka.com/php-pm:prod
+
+USER root
+
+RUN apk add --no-cache php7-xdebug \
+    && sed -i 's#^\(trapIt /ppm.* start\)\( .*\)#\1 --debug=1\2#' /docker-entrypoint.sh \
+    && echo -e 'zend_extension=xdebug.so\nxdebug.remote_enable=1' > /etc/php7/conf.d/xdebug.ini
+
+USER user
